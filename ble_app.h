@@ -27,8 +27,19 @@
 static const uint16_t MAX_ADVERTISING_PAYLOAD_SIZE = 50;
 
 /**
- * Handle initialization and shutdown of the BLE Instance.
- * It will also run the  event queue and call your post init callback when everything is up and running.
+ * This is a simplified app that handles running a BLE process for you. This will initialise the instance
+ * and handle the event queue.
+ *
+ * Use add_gap_event_handler() to get notified of gap events like connections.
+ * Use set_advertising_name to enable advertising under the given name. Use nullptr to disable advertising.
+ * Use set_target_name to enable scanning and attempt to connect to a device with the given name.
+ * Use nullptr to stop the scan.
+ *
+ * Use the start() method to start your application. This call will block and continue execution in the given
+ * callback.
+ * Use the stop() method to end the BLE process. This will stop servicing the event queue and shutdown
+ * the BLE instance. This will cause the start() method that started it to return.
+ *
  */
 class BLEApp : private mbed::NonCopyable<BLEApp>, public ble::Gap::EventHandler
 {
