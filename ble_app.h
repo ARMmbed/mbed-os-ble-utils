@@ -62,7 +62,7 @@ public:
             return;
         }
 
-        /* handle gap events */
+        /* Register the BLEApp as the handler for gap events */
         _gap_handler.addEventHandler(this);
         _ble.gap().setEventHandler(&_gap_handler);
 
