@@ -34,7 +34,7 @@ class BLEApp : private mbed::NonCopyable<BLEApp>, public ble::Gap::EventHandler
 {
 public:
     /**
-     * Construct a BLEApp from an event queue and a ble interface.
+     * Construct a BLEApp from a BLE instance.
      * Call start() to initiate ble processing.
      */
     BLEApp() : _ble(BLE::Instance())
