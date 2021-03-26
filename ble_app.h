@@ -66,7 +66,7 @@ public:
         _gap_handler.addEventHandler(this);
         _ble.gap().setEventHandler(&_gap_handler);
 
-        /* This will inform us off all events so we can schedule their handling
+        /* This will inform us of all events so we can schedule their handling
          * using our event queue */
         _ble.onEventsToProcess(
             makeFunctionPointer(this, &BLEApp::schedule_ble_events)
