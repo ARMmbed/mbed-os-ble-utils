@@ -1,0 +1,147 @@
+name: Build BLE examples
+
+on:
+  pull_request:
+  push:
+
+jobs: 
+  prepare:
+    container:
+      image: ghcr.io/armmbed/mbed-os-env:master-latest
+
+    outputs:
+      matrix : ${{ steps.find-examples.outputs.matrix }}
+
+    runs-on: ubuntu-latest
+
+    steps:
+      -
+        name: Checkout mbed-os-ble-utils
+        uses: actions/checkout@v2
+        with:
+          path: mbed-os-ble-utils
+
+      - name: Checkout mbed-os
+        uses: actions/checkout@v2
+        with:
+          repository: ARMmbed/mbed-os
+          path: mbed-os
+
+      - name: Checkout mbed-os-example-ble
+        uses: actions/checkout@v2
+        with:
+          repository: ARMmbed/mbed-os-example-ble
+          path: mbed-os-example-ble
+
+      - name: set examples in json object
+        id: find-examples
+        shell: bash
+        run: |
+          set -x
+          cd mbed-os-example-ble
+          examples=""
+          for i in BLE_* ; do
+            examples="{\"name\":\"$i\"},$examples"
+          done
+          examples="[${examples::-1}]"
+          echo "::set-output name=matrix::$examples"
+
+      - name: Prepare repositories
+        run: |
+          set -x
+          cd mbed-os-example-ble
+          # move .libs to temporary
+          # symlink mbed-os and mbed-os-ble-utils
+          # do mbed deploy
+          # move temporary to .libs
+          for i in BLE_* ; do
+            cd $i ;
+            mv mbed-os.lib mbed-os.lib.tmp
+            if [ -f mbed-os-ble-utils.lib ]; then
+              mv mbed-os-ble-utils.lib mbed-os-ble-utils.lib.tmp
+            fi
+            ln -s ../../mbed-os mbed-os ;
+            ln -s ../../mbed-os-ble-utils mbed-os-ble-utils ;
+
+            mbed config root . ;
+            mbed deploy
+            mv mbed-os.lib.tmp mbed-os.lib
+            if [ -f mbed-os-ble-utils.lib.tmp ]; then
+              mv mbed-os-ble-utils.lib.tmp mbed-os-ble-utils.lib
+            fi            
+            cd .. ;
+          done
+
+      - name: compress repos
+        run: |
+          tar -czf repos.tgz mbed-os-ble-utils mbed-os mbed-os-example-ble
+
+      - 
+        name: Archive information 
+        uses: actions/upload-artifact@v2
+        with:
+          name: repositories
+          path: |
+            ./repos.tgz
+
+  build-cli-v1:
+    needs: prepare
+    container:
+      image: ghcr.io/armmbed/mbed-os-env:master-latest
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        target: ["DISCO_L475VG_IOT01A", "NRF52840_DK"]
+        sub_example: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+        
+    steps:
+      - 
+        name: unarchive artefacts
+        uses: actions/download-artifact@v2
+        with:
+          name: repositories
+
+      -
+        name: untar repositories
+        run: |
+          tar -xf repos.tgz
+
+      -
+        name: build ${{matrix.sub_example.name}}
+        run: |
+          cd mbed-os-example-ble
+          cd ${{matrix.sub_example.name}}
+          mbed compile -t GCC_ARM -m ${{ matrix.target }}
+
+  build-cli-v2:
+    needs: prepare
+    container:
+      image: ghcr.io/armmbed/mbed-os-env:master-latest
+
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        target: ["DISCO_L475VG_IOT01A", "NRF52840_DK"]
+        sub_example: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+        
+    steps:
+      - 
+        name: unarchive artefacts
+        uses: actions/download-artifact@v2
+        with:
+          name: repositories
+
+      -
+        name: untar repositories
+        run: |
+          tar -xf repos.tgz
+
+      -
+        name: build ${{matrix.sub_example.name}}
+        run: |
+          cd mbed-os-example-ble
+          cd ${{matrix.sub_example.name}}
+          mbed-tools compile -t GCC_ARM -m ${{ matrix.target }}
