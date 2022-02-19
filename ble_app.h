@@ -24,6 +24,7 @@
 #include "platform/Callback.h"
 #include "platform/NonCopyable.h"
 
+
 static const uint16_t MAX_ADVERTISING_PAYLOAD_SIZE = 50;
 
 /**
@@ -132,6 +133,74 @@ public:
         return _gap_handler.addEventHandler(gap_handler);
     }
 
+    /**
+     * Add a new BLE Gatt Service.
+     *
+     * @param[in] reference to new GattService.
+     *
+     * @returns True on success.
+     */
+    bool add_new_gatt_service(GattService &newService)
+    {
+        ble_error_t error = _ble.gattServer().addService(newService);
+        if (error) {
+            print_error(error, "Error adding new Gatt service.\r\n");
+            return false;
+        }
+        
+        return true;
+    }
+
+    /** Set long Gatt Service UUID. */
+    bool set_GattUUID_128(const char *uuidstr)
+    {
+        if (_GATT_uuid16 == 0) {
+            if (uuidstr) {
+                char* new_uuid = nullptr;
+                size_t length = strlen(uuidstr) + 1;
+
+                if (uuidstr && length) {
+                    new_uuid = (char*)malloc(length);
+                    if (!new_uuid) {
+                        return false;
+                    }
+                    memcpy(new_uuid, uuidstr, length);
+                }
+
+                _event_queue.call([this,new_uuid]() {
+                    delete _GATT_uuid128;
+                    _GATT_uuid128 = new_uuid;
+                    _event_queue.call([this]() { start_activity(); });
+                });
+            }
+            return true;
+        }
+        else {
+            print_error(BLE_ERROR_NONE, "Short GATT UUID already set\r\n");
+        }
+
+        return false;
+    }
+
+    /** Set long Gatt Service UUID. */
+    bool set_GattUUID_16(uint16_t uuidval)
+    {
+        if (!_GATT_uuid128) {
+            if (uuidval > 0) {
+                _event_queue.call([this,uuidval]() {
+                    _GATT_uuid16 = uuidval;
+                    _event_queue.call([this]() { start_activity(); });
+                });
+            }
+            return true;
+        }
+        else {
+            print_error(BLE_ERROR_NONE, "Long GATT UUID already set\r\n");
+        }
+
+        return false;
+    }
+
     /** Set name we advertise as. */
     bool set_advertising_name(const char *advertising_name)
     {
@@ -178,16 +247,36 @@ public:
         return true;
     }
 
+    /** Sets the advertising duration in seconds, or allows indefinite advertising if zero. */
+    bool set_AdvertisingDuration(uint16_t sec = 0)
+    {
+        _advDuration_sec = sec; 
+        return true;
+    }
+
+    /** Get UUID as a string, otherwise returns nullptr or 0. */
+    const char* get_uuid_str() const
+    {
+        if (_GATT_uuid128) return _GATT_uuid128;
+        else return reinterpret_cast<const char*>(_GATT_uuid16);
+    }
+
     /** Get name we advertise as if set, otherwise returns nullptr. */
     const char* get_advertising_name() const
     {
         return _advertising_name;
     }
 
-    /** Get name we coonect to if set, otherwise returns nullptr. */
+    /** Get name we connect to if set, otherwise returns nullptr. */
     const char* get_target_name() const
     {
         return _target_name;
+    }
+
+    /** Retrieve the advertising duration in seconds. */
+    uint16_t get_advertising_duration()
+    {
+        return _advDuration_sec;
     }
 
 protected:
@@ -242,7 +331,7 @@ protected:
     }
 
     /** Restarts main activity */
-    void onAdvertisingEnd(const ble::AdvertisingEndEvent &event)
+    void onAdvertisingEnd(const ble::AdvertisingEndEvent &event) override
     {
         _event_queue.call([this]() { start_activity(); });
     }
@@ -298,6 +387,24 @@ protected:
         
         adv_data_builder.clear();
         adv_data_builder.setFlags();
+
+        if (_GATT_uuid128 && _GATT_uuid16 == 0) {
+            UUID _GATT_uuid = UUID(_GATT_uuid128);
+            error = adv_data_builder.setLocalServiceList(mbed::make_Span(&_GATT_uuid, 1));
+            if (error) {
+                print_error(error, "AdvertisingDataBuilder::setLocalServiceList() failed?)\r\n");
+                return;
+            }
+        }
+        else if  (!_GATT_uuid128 && _GATT_uuid16 > 0) {
+            UUID _GATT_uuid = UUID(_GATT_uuid16);
+            error = adv_data_builder.setLocalServiceList(mbed::make_Span(&_GATT_uuid, 1));
+            if (error) {
+                print_error(error, "AdvertisingDataBuilder::setLocalServiceList() failed?)\r\n");
+                return;
+            }
+        }
+
         error = adv_data_builder.setName(_advertising_name);
 
         if (error) {
@@ -315,7 +422,12 @@ protected:
             return;
         }
 
-        error = _ble.gap().startAdvertising(_adv_handle, ble::adv_duration_t(ble::second_t(10)));
+        if (_advDuration_sec > 0) {
+            error = _ble.gap().startAdvertising(_adv_handle, ble::adv_duration_t(ble::second_t(_advDuration_sec)));
+        }
+        else {
+            error = _ble.gap().startAdvertising(_adv_handle);
+        }
 
         if (error) {
             print_error(error, "Gap::startAdvertising() failed\r\n");
@@ -423,6 +535,12 @@ protected:
 
     char *_advertising_name = nullptr;
     char *_target_name = nullptr;
+
+    // MOD: Added in option for advertised local GATT Service
+    char *_GATT_uuid128 = nullptr;
+    UUID::ShortUUIDBytes_t _GATT_uuid16 = 0;
+
+    uint16_t _advDuration_sec = 0;
     
     ble::advertising_handle_t _adv_handle = ble::LEGACY_ADVERTISING_HANDLE;
 
