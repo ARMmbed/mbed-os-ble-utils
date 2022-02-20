@@ -1,5 +1,5 @@
 /* mbed Microcontroller Library
- * Copyright (c) 2006-2019 ARM Limited
+ * Copyright (c) 2006-2022 ARM Limited
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include "pretty_printer.h"
 #include "ble/BLE.h"
 #include "ChainableGapEventHandler.h"
+#include "ChainableGattServerEventHandler.h"
 #include "events/mbed_events.h"
 #include "platform/Callback.h"
 #include "platform/NonCopyable.h"
@@ -42,7 +43,7 @@ static const uint16_t MAX_ADVERTISING_PAYLOAD_SIZE = 50;
  * the BLE instance. This will cause the start() method that started it to return.
  *
  */
-class BLEApp : private mbed::NonCopyable<BLEApp>, public ble::Gap::EventHandler
+class BLEApp : private mbed::NonCopyable<BLEApp>, public ble::Gap::EventHandler, public ble::GattServer::EventHandler
 {
 public:
     /**
@@ -77,6 +78,7 @@ public:
         /* Register the BLEApp as the handler for gap events */
         _gap_handler.addEventHandler(this);
         _ble.gap().setEventHandler(&_gap_handler);
+
 
         /* This will inform us of all events so we can schedule their handling
          * using our event queue */
@@ -118,6 +120,7 @@ public:
             _is_connecting = false;
             _is_scanning = false;
             _gap_handler = ChainableGapEventHandler();
+            _gatt_server_handler = ChainableGattServerEventHandler();
         });
     }
 
@@ -131,6 +134,18 @@ public:
     bool add_gap_event_handler(ble::Gap::EventHandler *gap_handler)
     {
         return _gap_handler.addEventHandler(gap_handler);
+    }
+
+    /**
+     * Subscribe with your own gatt server handler.
+     *
+     * @param[in] gattserver_handler Handler implementing selected ble::GattServer::EventHandler methods.
+     *
+     * @returns True on success.
+     */
+    bool add_gattserver_event_handler(ble::GattServer::EventHandler *gattserver_handler)
+    {
+        return _gatt_server_handler.addEventHandler(gattserver_handler);
     }
 
     /**
@@ -279,6 +294,91 @@ public:
         return _advDuration_sec;
     }
 
+    /** Assign a new value to the characteristic handle. */
+    bool updateCharacteristicValue(GattAttribute::Handle_t ValueHandle, const uint8_t &value, uint16_t size, bool local_only = false) const
+    {
+
+        ble_error_t error = _ble.gattServer().write(ValueHandle, &value, size, local_only);
+
+        if (error) {
+            print_error(error, "Error updating CharacteristicValue.\r\n");
+            return false;
+        }
+        return true;
+    }
+
+    
+
+    /**
+     * Set callback for a succesful connection.
+     *
+     * @param[in] cb The callback object that will be called when we connect to a peer
+     */
+    void on_connect(mbed::Callback<void(BLE&, events::EventQueue&, const ble::ConnectionCompleteEvent &event)> cb)
+    {
+        _post_connect_cb = cb;
+    }
+
+    /**
+     * Set callback for a succesful disconnection.
+     *
+     * @param[in] cb The callback object that will be called when we connect to a peer
+     */
+    void on_disconnect(mbed::Callback<void(BLE&, events::EventQueue&, const ble::DisconnectionCompleteEvent &event)> cb)
+    {
+        _post_disconnect_cb = cb;
+    }
+
+    /**
+     * Set callback for a succesful notification updates enabled event.
+     *
+     * @param[in] cb The callback object that will be called when we connect to a peer
+     */
+    void on_updatesenabled(mbed::Callback<void(const GattUpdatesEnabledCallbackParams &params)> cb)
+    {
+        _post_serverupdatesenabled_cb = cb;
+    }
+
+    /**
+     * Set callback for a succesful notification updates disabled event.
+     *
+     * @param[in] cb The callback object that will be called when we connect to a peer
+     */
+    void on_updatesdisabled(mbed::Callback<void(const GattUpdatesDisabledCallbackParams &params)> cb)
+    {
+        _post_serverupdatesdisabled_cb = cb;
+    }
+
+    /**
+     * Set callback for a succesful Gatt Server write event.
+     *
+     * @param[in] cb The callback object that will be called when we connect to a peer
+     */
+    void on_serverwriteevent(mbed::Callback<void(const GattWriteCallbackParams &params)> cb)
+    {
+        _post_serverwriteevents_cb = cb;
+    }
+
+    /**
+     * Set callback for a succesful Gatt Server read event.
+     *
+     * @param[in] cb The callback object that will be called when we connect to a peer
+     */
+    void on_serverreadevent(mbed::Callback<void(const GattReadCallbackParams &params)> cb)
+    {
+        _post_serverreadevents_cb = cb;
+    }
+
+    /**
+     * Set callback for a succesful Att Mtu Change event.
+     *
+     * @param[in] cb The callback object that will be called when we connect to a peer
+     */
+    void on_AttMtuChange(mbed::Callback<void(ble::connection_handle_t connectionHandle, uint16_t attMtuSize)> cb)
+    {
+        _post_mtuchange_cb = cb;
+    }
+
 protected:
     /**
      * Sets up adverting payload and start advertising.
@@ -293,6 +393,7 @@ protected:
 
         printf("Ble instance initialized\r\n");
 
+        
         _event_queue.call([this]() { _post_init_cb(_ble, _event_queue); });
 
         /* All calls are serialised on the user thread through the event queue */
@@ -309,9 +410,17 @@ protected:
         if (event.getStatus() == BLE_ERROR_NONE) {
             _connected = true;
             _conn_handle = event.getConnectionHandle();
-            printf("Connected to: ");
-            print_address(event.getPeerAddress());
-        } else {
+
+            if (_post_connect_cb) {
+                _post_connect_cb(_ble, _event_queue, event);
+            }
+
+            // Initialise the Gatt Server events handler
+            _gatt_server_handler.addEventHandler(this);
+            _ble.gattServer().setEventHandler(&_gatt_server_handler);
+
+        } 
+        else {
             printf("Failed to connect\r\n");
             _event_queue.call([this]() { start_activity(); });
         }
@@ -325,10 +434,75 @@ protected:
     {
         if (_connected) {
             _connected = false;
-            printf("Disconnected.\r\n");
+
+            if (_post_disconnect_cb) {
+                _post_disconnect_cb(_ble, _event_queue, event);
+            }
+
             _event_queue.call([this]() { start_activity(); });
         }
     }
+
+    /**
+    * Handler called after a client has subscribed to notification or indication.
+    *
+    * @param handle Handle of the characteristic value affected by the change.
+    */
+    void onUpdatesEnabled(const GattUpdatesEnabledCallbackParams &params) override
+    {
+        if (_post_serverupdatesenabled_cb) {
+            _post_serverupdatesenabled_cb(params);
+        }
+        //printf("update enabled on handle %d\r\n", params.attHandle);
+
+    }
+
+    /**
+    * Handler called after a client has cancelled his subscription from
+    * notification or indication.
+    *
+    * @param handle Handle of the characteristic value affected by the change.
+    */
+    void onUpdatesDisabled(const GattUpdatesDisabledCallbackParams &params) override
+    {
+        if (_post_serverupdatesdisabled_cb) {
+            _post_serverupdatesdisabled_cb(params);
+        }
+        //printf("update disabled on handle %d\r\n", params.attHandle);
+
+    }
+
+    /**
+    * This callback allows the IntervalService to receive updates to the ledState Characteristic.
+    *
+    * @param[in] params Information about the characterisitc being updated.
+    */
+    void onDataWritten(const GattWriteCallbackParams &params) override
+    {
+        if (_post_serverwriteevents_cb) {
+            _post_serverwriteevents_cb(params);
+        }
+    }
+
+    /**
+        * Handler called after an attribute has been read.
+        */
+    void onDataRead(const GattReadCallbackParams &params) override
+    {
+        if (_post_serverreadevents_cb) {
+            _post_serverreadevents_cb(params);
+        }
+    }
+
+
+    void onAttMtuChange(ble::connection_handle_t connectionHandle, uint16_t attMtuSize) override
+    {
+        if (_post_mtuchange_cb) {
+            _post_mtuchange_cb(connectionHandle, attMtuSize);
+        }
+
+    }
+
 
     /** Restarts main activity */
     void onAdvertisingEnd(const ble::AdvertisingEndEvent &event) override
@@ -550,7 +724,15 @@ protected:
     bool _is_scanning = false;
 
     mbed::Callback<void(BLE&, events::EventQueue&)> _post_init_cb;
+    mbed::Callback<void(BLE&, events::EventQueue&, const ble::ConnectionCompleteEvent &event)> _post_connect_cb;
+    mbed::Callback<void(BLE&, events::EventQueue&, const ble::DisconnectionCompleteEvent &event)> _post_disconnect_cb;
+    mbed::Callback<void(const GattUpdatesEnabledCallbackParams &params)> _post_serverupdatesenabled_cb;
+    mbed::Callback<void(const GattUpdatesDisabledCallbackParams &params)> _post_serverupdatesdisabled_cb;
+    mbed::Callback<void(const GattWriteCallbackParams &params)> _post_serverwriteevents_cb;
+    mbed::Callback<void(const GattReadCallbackParams &params)> _post_serverreadevents_cb;
+    mbed::Callback<void(ble::connection_handle_t connectionHandle, uint16_t attMtuSize)> _post_mtuchange_cb;
     ChainableGapEventHandler _gap_handler;
+    ChainableGattServerEventHandler _gatt_server_handler;
 };
 
 #endif /* BLE_APP_H_ */
