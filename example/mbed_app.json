@@ -1,0 +1,22 @@
+{
+    "target_overrides": {
+        "*": {
+            "platform.stdio-baud-rate": 115200,
+            "platform.stdio-buffered-serial": 1,
+            "mbed-trace.enable": false,
+            "mbed-trace.max-level": "TRACE_LEVEL_DEBUG",
+            "cordio.desired-att-mtu": 48,
+            "cordio.rx-acl-buffer-size": 96,
+            "cordio.trace-hci-packets": false,
+            "cordio.trace-cordio-wsf-traces": false,
+            "ble.trace-human-readable-enums": false
+        },
+        "NRF52840_DK": {
+            "target.features_add": ["BLE"]
+        },
+        "NRF52_DK": {
+            "target.features_add": ["BLE"]
+        }
+    }
+
+}
